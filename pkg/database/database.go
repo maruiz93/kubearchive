@@ -12,23 +12,28 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-type newDatabaseFunc func(map[string]string) DBInterface
+type newDatabaseFunc func(*sql.DB, DBStatements) DBClient
+type newCreatorFunc func(map[string]string) DBCreator
 
-var RegisteredDatabases = make(map[string]newDatabaseFunc)
+var RegisteredDBInit = make(map[string]newDatabaseFunc)
+var RegisteredDBCreators = make(map[string]newCreatorFunc)
+var RegisteredDBStatements = make(map[string]DBStatements)
 
-type DBInfoInterface interface {
+// DBCreator provides the needed information to establish a connection to the database
+type DBCreator interface {
 	GetDriverName() string
 	GetConnectionString() string
+}
+
+// DBStatements provides the needed information to run the SQL statements by the database client
+type DBStatements interface {
 	GetResourcesSQL() string
 	GetNamespacedResourcesSQL() string
 	GetWriteResourceSQL() string
 }
 
-type DatabaseInfo struct {
-	env map[string]string
-}
-
-type DBInterface interface {
+// DBClient provides the logic to interact with the DB
+type DBClient interface {
 	QueryResources(ctx context.Context, kind, group, version string) ([]*unstructured.Unstructured, error)
 	QueryCoreResources(ctx context.Context, kind, version string) ([]*unstructured.Unstructured, error)
 	QueryNamespacedResources(ctx context.Context, kind, group, version, namespace string) ([]*unstructured.Unstructured, error)
@@ -38,23 +43,45 @@ type DBInterface interface {
 }
 
 type Database struct {
-	db   *sql.DB
-	info DBInfoInterface
+	db    *sql.DB
+	stmts DBStatements
 }
 
-func NewDatabase() (DBInterface, error) {
+func NewDatabase() (DBClient, error) {
+	// Extract the environment vars
 	env, err := newDatabaseEnvironment()
 	if err != nil {
 		return nil, err
 	}
+	// Get the type of DB
+	dbKind := env[DbKindEnvVar]
 
-	var database DBInterface
-	if f, ok := RegisteredDatabases[env[DbKindEnvVar]]; ok {
-		database = f(env)
+	// Get the registered creator, statements and client for the type of DB
+	var creator DBCreator
+	if c, ok := RegisteredDBCreators[dbKind]; ok {
+		creator = c(env)
 	} else {
-		panic(fmt.Sprintf("No database registered with name %s", env[DbKindEnvVar]))
+		panic(fmt.Sprintf("No database registered with name %s", dbKind))
 	}
 
+	var stmts DBStatements
+	if s, ok := RegisteredDBStatements[dbKind]; ok {
+		stmts = s
+	} else {
+		panic(fmt.Sprintf("No database registered with name %s", dbKind))
+	}
+
+	// Get DB Connection
+	conn := establishConnection(creator.GetDriverName(), creator.GetConnectionString())
+
+	var database DBClient
+	if init, ok := RegisteredDBInit[dbKind]; ok {
+		database = init(conn, stmts)
+	} else {
+		panic(fmt.Sprintf("No database registered with name %s", dbKind))
+	}
+
+	// Instantiate the DB Client
 	return database, nil
 }
 
@@ -64,20 +91,20 @@ func (db *Database) Ping(ctx context.Context) error {
 
 func (db *Database) QueryResources(ctx context.Context, kind, group, version string) ([]*unstructured.Unstructured, error) {
 	apiVersion := fmt.Sprintf("%s/%s", group, version)
-	return db.performResourceQuery(ctx, db.info.GetResourcesSQL(), kind, apiVersion)
+	return db.performResourceQuery(ctx, db.stmts.GetResourcesSQL(), kind, apiVersion)
 }
 
 func (db *Database) QueryCoreResources(ctx context.Context, kind, version string) ([]*unstructured.Unstructured, error) {
-	return db.performResourceQuery(ctx, db.info.GetResourcesSQL(), kind, version)
+	return db.performResourceQuery(ctx, db.stmts.GetResourcesSQL(), kind, version)
 }
 
 func (db *Database) QueryNamespacedResources(ctx context.Context, kind, group, version, namespace string) ([]*unstructured.Unstructured, error) {
 	apiVersion := fmt.Sprintf("%s/%s", group, version)
-	return db.performResourceQuery(ctx, db.info.GetNamespacedResourcesSQL(), kind, apiVersion, namespace)
+	return db.performResourceQuery(ctx, db.stmts.GetNamespacedResourcesSQL(), kind, apiVersion, namespace)
 }
 
 func (db *Database) QueryNamespacedCoreResources(ctx context.Context, kind, version, namespace string) ([]*unstructured.Unstructured, error) {
-	return db.performResourceQuery(ctx, db.info.GetNamespacedResourcesSQL(), kind, version, namespace)
+	return db.performResourceQuery(ctx, db.stmts.GetNamespacedResourcesSQL(), kind, version, namespace)
 }
 
 func (db *Database) performResourceQuery(ctx context.Context, query string, args ...string) ([]*unstructured.Unstructured, error) {
@@ -117,7 +144,7 @@ func (db *Database) WriteResource(ctx context.Context, k8sObj *unstructured.Unst
 	}
 	_, execErr := tx.ExecContext(
 		ctx,
-		db.info.GetWriteResourceSQL(),
+		db.stmts.GetWriteResourceSQL(),
 		k8sObj.GetUID(),
 		k8sObj.GetAPIVersion(),
 		k8sObj.GetKind(),

@@ -21,9 +21,10 @@ func establishConnection(driver, connectionString string) *sql.DB {
 		retry.Delay(time.Second),
 	}
 	var conn *sql.DB
+	var err error
 	errRetry := retry.Do(
 		func() error {
-			conn, err := otelsql.Open(driver, connectionString)
+			conn, err = otelsql.Open(driver, connectionString)
 			if err != nil {
 				return err
 			}

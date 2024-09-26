@@ -31,7 +31,7 @@ var tests = []struct {
 }{
 	{
 		name:     "postgresql",
-		database: &Database{info: &PostgreSQLDatabaseInfo{&DatabaseInfo{}}},
+		database: &Database{stmts: &PostgreSQLStmts{&DatabaseInfo{}}},
 	},
 }
 

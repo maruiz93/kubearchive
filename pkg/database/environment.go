@@ -22,7 +22,7 @@ const (
 
 var DbEnvVars = [...]string{DbKindEnvVar, DbNameEnvVar, DbUserEnvVar, DbPasswordEnvVar, DbHostEnvVar, DbPortEnvVar}
 
-// Reads database connection info from the environment variables and returns a map of variable name to value.
+// Reads database connection stmts from the environment variables and returns a map of variable name to value.
 func newDatabaseEnvironment() (map[string]string, error) {
 	var err error
 	env := make(map[string]string)
