@@ -4,7 +4,6 @@
 package database
 
 import (
-	"database/sql"
 	"fmt"
 
 	_ "github.com/lib/pq"
@@ -45,7 +44,8 @@ type PostgreSQLDatabase struct {
 	*Database
 }
 
-func NewPostgreSQLDatabase() DBInterface {
-	var db *sql.DB
-	return PostgreSQLDatabase{&Database{db, PostgreSQLDatabaseInfo{&DatabaseInfo{}}}}
+func NewPostgreSQLDatabase(env map[string]string) DBInterface {
+	info := PostgreSQLDatabaseInfo{&DatabaseInfo{env: env}}
+	db := establishConnection(info.GetDriverName(), info.GetConnectionString())
+	return PostgreSQLDatabase{&Database{db: db, info: info}}
 }

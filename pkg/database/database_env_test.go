@@ -45,7 +45,7 @@ func TestGetDatabaseEnvironmentVars(t *testing.T) {
 			for k, v := range tt.env {
 				os.Setenv(k, v)
 			}
-			got1, got2 := NewDatabaseEnvironment()
+			got1, got2 := newDatabaseEnvironment()
 			if tt.want1 != (got1 == nil) {
 				t.Errorf("WANT: %t\nGOT: %t", tt.want1, reflect.ValueOf(got1).Kind() == reflect.Map)
 			}

@@ -7,21 +7,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
-	"time"
 
-	"github.com/XSAM/otelsql"
-	"github.com/avast/retry-go/v4"
 	"github.com/kubearchive/kubearchive/pkg/models"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-type newDatabaseFunc func() DBInterface
+type newDatabaseFunc func(map[string]string) DBInterface
 
 var RegisteredDatabases = make(map[string]newDatabaseFunc)
 
 type DBInfoInterface interface {
-	SetEnvironment(map[string]string)
 	GetDriverName() string
 	GetConnectionString() string
 	GetResourcesSQL() string
@@ -33,10 +28,6 @@ type DatabaseInfo struct {
 	env map[string]string
 }
 
-func (info *DatabaseInfo) SetEnvironment(env map[string]string) {
-	info.env = env
-}
-
 type DBInterface interface {
 	QueryResources(ctx context.Context, kind, group, version string) ([]*unstructured.Unstructured, error)
 	QueryCoreResources(ctx context.Context, kind, version string) ([]*unstructured.Unstructured, error)
@@ -44,7 +35,6 @@ type DBInterface interface {
 	QueryNamespacedCoreResources(ctx context.Context, kind, version, namespace string) ([]*unstructured.Unstructured, error)
 	WriteResource(ctx context.Context, k8sObj *unstructured.Unstructured, data []byte) error
 	Ping(ctx context.Context) error
-	TestConnection(env map[string]string) error
 }
 
 type Database struct {
@@ -53,51 +43,19 @@ type Database struct {
 }
 
 func NewDatabase() (DBInterface, error) {
-	env, err := NewDatabaseEnvironment()
+	env, err := newDatabaseEnvironment()
 	if err != nil {
 		return nil, err
 	}
 
 	var database DBInterface
 	if f, ok := RegisteredDatabases[env[DbKindEnvVar]]; ok {
-		database = f()
+		database = f(env)
 	} else {
 		panic(fmt.Sprintf("No database registered with name %s", env[DbKindEnvVar]))
 	}
 
-	err = database.TestConnection(env)
-	if err != nil {
-		return nil, err
-	}
 	return database, nil
-}
-
-func (db *Database) TestConnection(env map[string]string) error {
-	db.info.SetEnvironment(env)
-
-	configs := []retry.Option{
-		retry.Attempts(10),
-		retry.OnRetry(func(n uint, err error) {
-			log.Printf("Retry request %d, get error: %v", n+1, err)
-		}),
-		retry.Delay(time.Second),
-	}
-
-	errRetry := retry.Do(
-		func() error {
-			conn, err := otelsql.Open(db.info.GetDriverName(), db.info.GetConnectionString())
-			if err != nil {
-				return err
-			}
-			db.db = conn
-			return db.db.Ping()
-		},
-		configs...)
-	if errRetry != nil {
-		return errRetry
-	}
-	log.Println("Successfully connected to the database")
-	return nil
 }
 
 func (db *Database) Ping(ctx context.Context) error {
