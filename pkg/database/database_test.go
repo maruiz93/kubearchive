@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
@@ -23,6 +24,7 @@ import (
 const (
 	kind              = "CronJob"
 	cronJobApiVersion = "batch/v1"
+	podKind           = "Pod"
 	podApiVersion     = "v1"
 	cronJobName       = "test-cronjob"
 	podName           = "test-pod"
@@ -216,7 +218,7 @@ func TestQueryResourcesWithoutNamespace(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sb := tt.database.Selector.ResourceSelector()
 			sb.Where(
-				tt.database.Filter.KindFilter(sb.Cond, kind),
+				tt.database.Filter.KindFilter(sb.Cond, podKind),
 				tt.database.Filter.ApiVersionFilter(sb.Cond, podApiVersion),
 			)
 			sb = tt.database.Sorter.CreationTSAndIDSorter(sb)
@@ -231,12 +233,13 @@ func TestQueryResourcesWithoutNamespace(t *testing.T) {
 					if ttt.data {
 						rows.AddRow("2024-04-05T09:58:03Z", 5, json.RawMessage(testPodResource))
 					}
-					mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(kind, podApiVersion).WillReturnRows(rows)
+					mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(podKind, podApiVersion).WillReturnRows(rows)
 
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 					defer cancel()
 
-					resources, lastId, _, err := tt.database.QueryResources(ctx, kind, version, "", "", "", "", 100)
+					resources, lastId, _, err := tt.database.QueryResources(ctx, podKind, version,
+						"", "", "", "", &LabelFilters{}, 100)
 					if ttt.numResources == 0 {
 						assert.Nil(t, resources)
 						assert.Equal(t, int64(0), lastId)
@@ -257,7 +260,7 @@ func TestQueryResources(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sb := tt.database.Selector.ResourceSelector()
 			sb.Where(
-				tt.database.Filter.KindFilter(sb.Cond, kind),
+				tt.database.Filter.KindFilter(sb.Cond, podKind),
 				tt.database.Filter.ApiVersionFilter(sb.Cond, podApiVersion),
 				tt.database.Filter.NamespaceFilter(sb.Cond, namespace),
 			)
@@ -273,12 +276,13 @@ func TestQueryResources(t *testing.T) {
 					if ttt.data {
 						rows.AddRow("2024-04-05T09:58:03Z", 1, json.RawMessage(testPodResource))
 					}
-					mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(kind, podApiVersion, namespace).WillReturnRows(rows)
+					mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(podKind, podApiVersion, namespace).WillReturnRows(rows)
 
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 					defer cancel()
 
-					resources, _, _, err := tt.database.QueryResources(ctx, kind, version, namespace, "", "", "", 100)
+					resources, _, _, err := tt.database.QueryResources(ctx, podKind, version, namespace,
+						"", "", "", &LabelFilters{}, 100)
 					if ttt.numResources == 0 {
 						assert.Nil(t, resources)
 					} else {
@@ -289,6 +293,124 @@ func TestQueryResources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQueryResourcesWithLabelFilters(t *testing.T) {
+
+	// NOTE: The extra values are commented because they make the unit tests flaky
+	// The reason behind is that the order of arguments in a map is not deterministic
+	var filterTests = []struct {
+		name         string
+		labelFilters LabelFilters
+	}{
+		{
+			name: "existence", // kubectl get pods -l 'key1, key2'
+			labelFilters: LabelFilters{
+				Exists: []string{"key1", "key2"},
+			},
+		},
+		{
+			name: "not-existence", // kubectl get pods -l '!key1, !key2'
+			labelFilters: LabelFilters{
+				NotExists: []string{"key1", "key2"},
+			},
+		},
+		{
+			name: "equality", // kubectl get pods -l 'key1=value1,key2=value2'
+			labelFilters: LabelFilters{
+				Equals: map[string]string{
+					"key1": "value1",
+					//	"key2": "value2",
+				},
+			},
+		},
+		{
+			name: "inequality", // kubectl get pods -l 'key1!=value1,key2!=value2'
+			labelFilters: LabelFilters{
+				NotEquals: map[string]string{
+					"key1": "value1",
+					//	"key2": "value2",
+				},
+			},
+		},
+		{
+			name: "set based", // kubectl get pods -l 'key1 in (value1, value3), key2 in (value2)'
+			labelFilters: LabelFilters{
+				In: map[string][]string{
+					//	"key1": {"value1", "value3"},
+					"key2": {"value2"},
+				},
+			},
+		},
+		{
+			name: "set not based", // kubectl get pods -l 'key1 notin (value1, value3), key2 notin (value2)'
+			labelFilters: LabelFilters{
+				NotIn: map[string][]string{
+					//	"key1": {"value1", "value3"},
+					"key2": {"value2"},
+				},
+			},
+		},
+		{
+			name: "all filters", // kubectl get pods -l 'key1, !key2, key3=value3, key4!=value4, key5 in (value5,value6), key6 notin (value6)'
+			labelFilters: LabelFilters{
+				Exists:    []string{"key1"},
+				NotExists: []string{"key2"},
+				Equals:    map[string]string{"key3": "value3"},
+				NotEquals: map[string]string{"key4": "value4"},
+				In:        map[string][]string{"key5": {"value5, value6"}},
+				NotIn:     map[string][]string{"key6": {"value6"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		for _, ttt := range filterTests {
+			t.Run(fmt.Sprintf("%s %s", tt.name, ttt.name), func(t *testing.T) {
+				sb := tt.database.Selector.ResourceSelector()
+				sb.Where(
+					tt.database.Filter.KindFilter(sb.Cond, podKind),
+					tt.database.Filter.ApiVersionFilter(sb.Cond, podApiVersion),
+				)
+				if ttt.labelFilters.Exists != nil {
+					sb.Where(tt.database.Filter.ExistsLabelFilter(sb.Cond, ttt.labelFilters.Exists))
+				}
+				if ttt.labelFilters.NotExists != nil {
+					sb.Where(tt.database.Filter.NotExistsLabelFilter(sb.Cond, ttt.labelFilters.NotExists))
+				}
+				if ttt.labelFilters.Equals != nil {
+					sb.Where(tt.database.Filter.EqualsLabelFilter(sb.Cond, ttt.labelFilters.Equals))
+				}
+				if ttt.labelFilters.NotEquals != nil {
+					sb.Where(tt.database.Filter.NotEqualsLabelFilter(sb.Cond, ttt.labelFilters.NotEquals))
+				}
+				if ttt.labelFilters.In != nil {
+					sb.Where(tt.database.Filter.InLabelFilter(sb.Cond, ttt.labelFilters.In))
+				}
+				if ttt.labelFilters.NotIn != nil {
+					sb.Where(tt.database.Filter.NotInLabelFilter(sb.Cond, ttt.labelFilters.NotIn))
+				}
+				sb = tt.database.Sorter.CreationTSAndIDSorter(sb)
+				sb.Limit(100)
+				query, args := sb.BuildWithFlavor(tt.database.Flavor)
+				db, mock := NewMock()
+				tt.database.DB = sqlx.NewDb(db, "sqlmock")
+				rows := sqlmock.NewRows(resourceQueryColumns)
+				rows.AddRow("2024-04-05T09:58:03Z", 1, json.RawMessage(testPodResource))
+				mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(sliceOfAny2sliceOfValue(args)...).WillReturnRows(rows)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				defer cancel()
+
+				resources, _, _, err := tt.database.QueryResources(ctx, podKind, version,
+					"", "", "", "",
+					&ttt.labelFilters, 100,
+				)
+				assert.NotNil(t, resources)
+				assert.NoError(t, err)
+			})
+		}
+	}
+
 }
 
 func TestQueryNamespacedResourceByName(t *testing.T) {
@@ -316,7 +438,8 @@ func TestQueryNamespacedResourceByName(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 					defer cancel()
 
-					resources, _, _, err := tt.database.QueryResources(ctx, kind, version, namespace, podName, "", "", 100)
+					resources, _, _, err := tt.database.QueryResources(ctx, kind, version, namespace, podName,
+						"", "", &LabelFilters{}, 100)
 					if ttt.numResources == 0 {
 						assert.Empty(t, resources)
 					} else {
