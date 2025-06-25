@@ -6,7 +6,7 @@ loki:
   auth_enabled: true
   basic_auth:
     enabled: true
-    username: admin
+    existingSecret: loki-basic-auth
   storage:
     type: s3
     bucketNames:

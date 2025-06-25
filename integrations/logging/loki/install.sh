@@ -71,7 +71,7 @@ kubectl get secret -n ${NAMESPACE} loki-basic-auth > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
   echo "Secret 'loki-basic-auth' not found, creating it..."
-  kubectl create secret -n ${NAMESPACE} generic loki-basic-auth --from-literal=username=admin --from-literal=password=${LOKI_PWD}
+  kubectl create secret -n ${NAMESPACE} generic loki-basic-auth --from-literal=USERNAME=admin --from-literal=PASSWORD=${LOKI_PWD}
 else
   echo "Secret 'loki-basic-auth' already exists."
 fi
@@ -81,7 +81,6 @@ set -e
 # Deploy loki
 helm upgrade --install --create-namespace --namespace ${NAMESPACE} --values values.loki.yaml loki grafana/loki \
  --set "loki.storage.s3.secretAccessKey=${MINIO_PWD}" \
- --set "loki.basic_auth.password=${LOKI_PWD}"
 
 # Deploy Grafana
 if [ "${GRAFANA}" == "True" ]; then
