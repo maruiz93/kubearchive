@@ -1,13 +1,15 @@
 = CLI Configuration
 
-The kubectl-ka plugin supports configuration through environment variables and CLI flags, following the same pattern as kubectl and other plugins.
+The kubectl-ka plugin supports configuration through persistent configuration files, environment variables, and CLI flags, following the same pattern as kubectl and other plugins.
 
 == Configuration Precedence
 
 Configuration values are resolved in the following order (highest to lowest priority):
 
 . *Plugin CLI Flags* - Plugin-specific command line arguments
-. *Environment Variables* - System environment variables
+. *Environment Variables* - System environment variables  
+. *Persistent Configuration* - Cluster-specific settings stored in `~/.config/kubectl-ka.conf`
+. *kubectl Configuration* - Bearer tokens from kubectl config
 . *Default Values* - Built-in defaults
 
 == Global Configuration Parameters
@@ -39,6 +41,150 @@ All configuration can be set using environment variables with the prefix `KUBECT
 |(uses kubectl's `--token` flag)
 
 |===
+
+== Persistent Configuration
+
+The plugin automatically manages cluster-specific configuration in `~/.config/kubectl-ka.conf`. This eliminates
+the need to specify KubeArchive connection details repeatedly when working with multiple clusters.
+
+=== Configuration File Location
+
+The default configuration file location can be customized:
+
+[source,bash]
+----
+# Use custom configuration file location
+export KUBECTL_PLUGIN_KA_CONFIG_PATH="/path/to/my-config.conf"
+kubectl ka get pods
+----
+
+=== Automatic Setup
+
+When you first run a command, the plugin will:
+
+1. Detect if configuration exists for your current cluster
+2. If not found, offer to run interactive setup
+3. Attempt to discover KubeArchive services automatically
+4. Guide you through authentication setup if needed
+
+[source,bash]
+----
+# First time usage example
+kubectl ka get pods
+
+# Output:
+# Do you want to configure KubeArchive CLI for cluster 'my-cluster'? (Y/n): y
+# Cluster name [my-cluster]: production
+# 🔍 Discovering KubeArchive services in the cluster...
+# ✓ Found KubeArchive at https://kubearchive-api.example.com
+# 🔐 Setting up authentication...
+# ✓ Found bearer token in kubectl config
+# Configuration saved to: /home/user/.config/kubectl-ka.conf
+----
+
+=== Manual Configuration
+
+You can also configure clusters manually using the `config` command:
+
+[source,bash]
+----
+# Set KubeArchive host for current cluster
+kubectl ka config set host https://kubearchive-api.example.com
+
+# Set authentication token
+kubectl ka config set token <your-service-account-token>
+
+# Set custom certificate authority
+kubectl ka config set ca /path/to/ca.crt
+
+# Enable insecure TLS (defaults to true if no value provided)
+kubectl ka config set insecure
+kubectl ka config set insecure true    # Explicit
+
+# Clear/reset configuration values
+kubectl ka config unset ca             # Clear certificate authority
+kubectl ka config unset insecure       # Reset to secure mode
+kubectl ka config unset token          # Use kubectl's token dynamically
+----
+
+=== Configuration File Format
+
+The configuration file uses YAML format:
+
+[source,yaml]
+----
+clusters:
+    production-cluster:
+        cluster_name: production-cluster
+        server_url: https://api.prod.example.com:6443
+        host: https://kubearchive-api.prod.example.com
+        tls_insecure: false
+        cert_path: /path/to/ca.crt
+        token: eyJhbGciOiJSUzI1NiIs...
+    staging-cluster:
+        cluster_name: staging-cluster  
+        server_url: https://api.staging.example.com:6443
+        host: https://kubearchive-api.staging.example.com
+        tls_insecure: true
+----
+
+[IMPORTANT]
+====
+**Token Handling**: The plugin intelligently manages authentication tokens:
+
+* **kubectl tokens**: Used dynamically from kubectl config, never stored in persistent configuration
+* **Service account tokens**: Created during interactive setup and stored in persistent configuration
+* **Manual tokens**: Set via `kubectl ka config set token` and stored in persistent configuration
+====
+
+=== Configuration Management Features
+
+The plugin provides several user-friendly features for configuration management:
+
+==== Smart Defaults
+
+* **Insecure TLS**: `kubectl ka config set insecure` defaults to `true` (insecure mode enabled)
+* **Token Validation**: Tokens are validated for JWT format and tested against the KubeArchive API
+* **Path Expansion**: Certificate paths support tilde (`~`) expansion and are converted to absolute paths
+
+==== Helpful Error Messages
+
+The plugin provides specific, actionable error messages instead of generic help text:
+
+[source,bash]
+----
+# Missing certificate path
+kubectl ka config set ca
+# ❌ Missing certificate path for key 'ca'
+# Usage: kubectl ka config set ca <path>
+# Example: kubectl ka config set ca /path/to/ca.crt
+# Tip: Use 'kubectl ka config unset ca' to clear the certificate
+
+# Missing token
+kubectl ka config set token
+# ❌ Missing token value for key 'token'
+# Usage: kubectl ka config set token <jwt-token>
+# Example: kubectl ka config set token eyJhbGciOiJSUzI1NiIs...
+# Tip: Use 'kubectl ka config unset token' to use kubectl's token
+----
+
+==== Shell Autocompletion
+
+The plugin supports shell autocompletion for commands, configuration keys, and values:
+
+[source,bash]
+----
+# Install bash completion
+kubectl ka completion bash > /etc/bash_completion.d/kubectl-ka
+
+# Tab completion works for configuration keys
+kubectl ka config set <TAB>
+# Completes: host, ca, insecure, token
+
+# Tab completion works for boolean values
+kubectl ka config set insecure <TAB>
+# Completes: true, false
+----
 
 == Authentication
 
@@ -91,4 +237,33 @@ KUBECTL_PLUGIN_KA_CERT_PATH="/path/to/ca.crt" kubectl ka get v1 pods
 [source,bash]
 ----
 KUBECTL_PLUGIN_KA_HOST="https://kubearchive.apps.example.com" kubectl ka get v1 pods
+----
+
+=== Manage persistent configuration
+
+[source,bash]
+----
+# List all configured clusters
+kubectl ka config list
+
+# Set up configuration for current cluster interactively
+kubectl ka config setup
+
+# Set KubeArchive host for current cluster
+kubectl ka config set host https://kubearchive-api.example.com
+
+# Set individual configuration values
+kubectl ka config set token <your-token>
+kubectl ka config set ca /path/to/ca.crt
+kubectl ka config set insecure          # Defaults to true
+kubectl ka config set insecure false    # Explicit secure mode
+
+# Clear/reset individual configuration values
+kubectl ka config unset ca              # Clear certificate authority
+kubectl ka config unset insecure        # Reset to secure mode
+kubectl ka config unset token           # Use kubectl's token
+
+# Remove configuration for a cluster
+kubectl ka config remove production-cluster
+kubectl ka config remove --current
 ----

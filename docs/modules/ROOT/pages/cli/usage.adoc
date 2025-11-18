@@ -13,6 +13,7 @@ The plugin supports the following commands:
 
 * `get` - Retrieve Kubernetes resources from both live cluster and KubeArchive
 * `logs` - Retrieve container logs from archived resources
+* `config` - Manage persistent configuration for different clusters
 * `completion` - Generate shell autocompletion scripts (limited functionality)
 
 [NOTE]
@@ -192,6 +193,190 @@ kubectl ka logs deployment/nginx
 # Get logs from all pods matching label
 kubectl ka logs pods -l app=nginx
 ----
+
+== config Command
+
+Manage persistent configuration for different Kubernetes clusters. The plugin automatically stores cluster-specific
+KubeArchive settings in `~/.config/kubectl-ka.conf`, eliminating the need to specify connection details repeatedly.
+
+[NOTE]
+====
+Configuration is stored per-cluster, not per-namespace. All namespaces within the same cluster share the same
+KubeArchive configuration.
+====
+
+=== Automatic Configuration
+
+When you first run a `get` or `logs` command, the plugin will automatically:
+
+1. Detect your current Kubernetes cluster
+2. Search for KubeArchive services in the cluster
+3. Attempt to discover the KubeArchive API endpoint
+4. Guide you through interactive setup if needed
+
+[source,bash]
+----
+# First time usage triggers automatic setup
+kubectl ka get pods
+
+# Example output:
+# Do you want to configure KubeArchive CLI for cluster 'my-cluster'? (Y/n): y
+# Cluster name [my-cluster]: 
+# 🔍 Discovering KubeArchive services in the cluster...
+# ✓ Found KubeArchive at https://kubearchive-api.example.com
+# Configuration saved to: /home/user/.config/kubectl-ka.conf
+----
+
+=== Subcommands
+
+==== list
+
+Display all configured clusters and their settings.
+
+[source,bash]
+----
+kubectl ka config list
+----
+
+Example output:
+[source,text]
+----
+📋 production-cluster
+   Server:  https://api.prod.example.com:6443
+   Host:    https://kubearchive-api.prod.example.com
+   Config:  TLS: Secure • Token: kubectl
+
+📋 staging-cluster
+   Server:  https://api.staging.example.com:6443
+   Host:    https://kubearchive-api.staging.example.com
+   Config:  TLS: Insecure • Token: Stored
+----
+
+==== setup
+
+Run interactive configuration setup for the current cluster.
+
+[source,bash]
+----
+# Interactive setup for current cluster
+kubectl ka config setup
+
+# Force overwrite existing configuration
+kubectl ka config setup --force
+----
+
+==== set
+
+Set individual configuration values for the current cluster.
+
+[source,bash]
+----
+# Set KubeArchive host
+kubectl ka config set host https://kubearchive-api.example.com
+
+# Set custom certificate authority
+kubectl ka config set ca /path/to/ca.crt
+
+# Enable insecure TLS (defaults to true if no value provided)
+kubectl ka config set insecure
+kubectl ka config set insecure true    # Explicit
+kubectl ka config set insecure false   # Secure mode
+
+# Set authentication token
+kubectl ka config set token <your-jwt-token>
+----
+
+Available configuration keys:
+
+* `host` - KubeArchive API server URL (required)
+* `ca` - Path to certificate authority file (optional)
+* `insecure` - Skip TLS verification (optional, defaults to true if no value provided)
+* `token` - Bearer token for authentication (optional)
+
+[NOTE]
+====
+The `insecure` key can be used without a value and will default to `true` (insecure mode enabled).
+This provides a convenient shorthand for enabling insecure TLS connections.
+====
+
+==== unset
+
+Clear/reset individual configuration values for the current cluster.
+
+[source,bash]
+----
+# Clear certificate authority (use system defaults)
+kubectl ka config unset ca
+
+# Reset TLS to secure mode
+kubectl ka config unset insecure
+
+# Clear stored token (use kubectl's token dynamically)
+kubectl ka config unset token
+----
+
+Available keys for unsetting:
+
+* `ca` - Clear certificate authority file path
+* `insecure` - Reset TLS verification to secure (false)
+* `token` - Clear bearer token (falls back to kubectl's token)
+
+[NOTE]
+====
+The `host` configuration cannot be unset as it's required for KubeArchive to function.
+Use `kubectl ka config remove` to remove the entire cluster configuration instead.
+====
+
+[TIP]
+====
+Use `unset` to reset configurations to their defaults or to switch from stored values
+to dynamic kubectl-based authentication.
+====
+
+==== remove
+
+Remove configuration for a specific cluster.
+
+[source,bash]
+----
+# Remove configuration for a specific cluster
+kubectl ka config remove my-cluster
+
+# Remove configuration for current cluster
+kubectl ka config remove --current
+----
+
+=== Configuration File
+
+The configuration is stored in YAML format at `~/.config/kubectl-ka.conf`:
+
+[source,yaml]
+----
+clusters:
+    production-cluster:
+        cluster_name: production-cluster
+        server_url: https://api.prod.example.com:6443
+        host: https://kubearchive-api.prod.example.com
+        tls_insecure: false
+        cert_path: /path/to/ca.crt
+        token: eyJhbGciOiJSUzI1NiIs...
+    staging-cluster:
+        cluster_name: staging-cluster
+        server_url: https://api.staging.example.com:6443
+        host: https://kubearchive-api.staging.example.com
+        tls_insecure: true
+----
+
+[TIP]
+====
+The configuration file location can be customized using the `KUBECTL_PLUGIN_KA_CONFIG_PATH` environment variable.
+====
+
+[IMPORTANT]
+====
+**Token Storage**: When kubectl config contains a bearer token, it is used dynamically and NOT stored in the
+persistent configuration. Only service account tokens created during setup are stored persistently.
+====
 
 == completion Command
 
