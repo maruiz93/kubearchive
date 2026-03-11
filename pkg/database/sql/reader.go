@@ -43,9 +43,11 @@ func (db *sqlDatabaseImpl) QueryResourceByUID(ctx context.Context, kind, apiVers
 	return &resources[0], nil
 }
 
-func (db *sqlDatabaseImpl) QueryResources(ctx context.Context, kind, apiVersion, namespace, name,
+// buildResourceListQuery builds the SQL select query for listing resources.
+// This is shared between QueryResources and StreamResources.
+func (db *sqlDatabaseImpl) buildResourceListQuery(kind, apiVersion, namespace, name,
 	continueId, continueDate string, labelFilters *models.LabelFilters,
-	creationTimestampAfter, creationTimestampBefore *time.Time, limit int) ([]models.Resource, error) {
+	creationTimestampAfter, creationTimestampBefore *time.Time, limit int) *sqlbuilder.SelectBuilder {
 	sb := db.selector.ResourceSelector()
 	sb.Where(db.filter.KindApiVersionFilter(sb.Cond, kind, apiVersion))
 	if namespace != "" {
@@ -95,7 +97,24 @@ func (db *sqlDatabaseImpl) QueryResources(ctx context.Context, kind, apiVersion,
 		sb = db.sorter.CreationTSAndIDSorter(sb)
 		sb.Limit(limit)
 	}
+	return sb
+}
+
+func (db *sqlDatabaseImpl) QueryResources(ctx context.Context, kind, apiVersion, namespace, name,
+	continueId, continueDate string, labelFilters *models.LabelFilters,
+	creationTimestampAfter, creationTimestampBefore *time.Time, limit int) ([]models.Resource, error) {
+	sb := db.buildResourceListQuery(kind, apiVersion, namespace, name,
+		continueId, continueDate, labelFilters, creationTimestampAfter, creationTimestampBefore, limit)
 	return db.performResourceQuery(ctx, sb)
+}
+
+func (db *sqlDatabaseImpl) StreamResources(ctx context.Context, kind, apiVersion, namespace, name,
+	continueId, continueDate string, labelFilters *models.LabelFilters,
+	creationTimestampAfter, creationTimestampBefore *time.Time, limit int,
+	fn func(resource models.Resource) error) error {
+	sb := db.buildResourceListQuery(kind, apiVersion, namespace, name,
+		continueId, continueDate, labelFilters, creationTimestampAfter, creationTimestampBefore, limit)
+	return newQueryPerformer[models.Resource](db.db, db.flavor).performStreamQuery(ctx, sb, fn)
 }
 
 type uuidKindDate struct {

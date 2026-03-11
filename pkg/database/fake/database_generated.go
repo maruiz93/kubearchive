@@ -216,9 +216,9 @@ func (f *fakeDatabase) QueryResourceByUID(ctx context.Context, kind, apiVersion,
 	return nil, f.err
 }
 
-func (f *fakeDatabase) QueryResources(ctx context.Context, kind, version, namespace, name,
-	continueId, continueDate string, _ *models.LabelFilters,
-	creationTimestampAfter, creationTimestampBefore *time.Time, limit int) ([]models.Resource, error) {
+func (f *fakeDatabase) queryFilteredResources(ctx context.Context, kind, version, namespace, name,
+	continueId, continueDate string,
+	creationTimestampAfter, creationTimestampBefore *time.Time, limit int) []models.Resource {
 	var resources []models.Resource
 
 	if name != "" && strings.Contains(name, "*") {
@@ -235,7 +235,32 @@ func (f *fakeDatabase) QueryResources(ctx context.Context, kind, version, namesp
 		resources = f.filterResourcesByTimestamp(resources, creationTimestampAfter, creationTimestampBefore)
 	}
 
+	return resources
+}
+
+func (f *fakeDatabase) QueryResources(ctx context.Context, kind, version, namespace, name,
+	continueId, continueDate string, _ *models.LabelFilters,
+	creationTimestampAfter, creationTimestampBefore *time.Time, limit int) ([]models.Resource, error) {
+	resources := f.queryFilteredResources(ctx, kind, version, namespace, name,
+		continueId, continueDate, creationTimestampAfter, creationTimestampBefore, limit)
 	return resources, f.err
+}
+
+func (f *fakeDatabase) StreamResources(ctx context.Context, kind, version, namespace, name,
+	continueId, continueDate string, _ *models.LabelFilters,
+	creationTimestampAfter, creationTimestampBefore *time.Time, limit int,
+	fn func(resource models.Resource) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	resources := f.queryFilteredResources(ctx, kind, version, namespace, name,
+		continueId, continueDate, creationTimestampAfter, creationTimestampBefore, limit)
+	for _, resource := range resources {
+		if err := fn(resource); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // filterResourcesByTimestamp filters resources based on creation timestamp
