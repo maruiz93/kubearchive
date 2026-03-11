@@ -306,7 +306,9 @@ func (opts *KARetrieverOptions) GetNamespace() (string, error) {
 	return "", fmt.Errorf("unable to retrieve namespace from kubeconfig context")
 }
 
-// ResolveResourceSpec resolves a resource specification using Kubernetes discovery API
+// ResolveResourceSpec resolves a resource specification using Kubernetes discovery API.
+// Supported formats: resource, resource.group, resource.version.group
+// Groups may contain dots (e.g., tekton.dev), so parsing joins remaining parts accordingly.
 func (opts *KARetrieverOptions) ResolveResourceSpec(resourceSpec string) (*ResourceInfo, error) {
 	parts := strings.Split(resourceSpec, ".")
 
@@ -314,23 +316,21 @@ func (opts *KARetrieverOptions) ResolveResourceSpec(resourceSpec string) (*Resou
 		return nil, fmt.Errorf("resource name cannot be empty")
 	}
 
-	if len(parts) > 3 {
-		return nil, fmt.Errorf("invalid resource specification format: %s", resourceSpec)
-	}
-
 	resourceName := parts[0]
 	var requestedVersion, requestedGroup string
 
-	switch len(parts) {
-	case 1:
-		// resource only - need to discover both version and group
-	case 2:
-		// resource.group - need to discover the version for the group
-		requestedGroup = parts[1]
-	case 3:
-		// resource.version.group - everything specified
-		requestedVersion = parts[1]
-		requestedGroup = parts[2]
+	if len(parts) > 1 {
+		// Check if the second part looks like a version (starts with 'v' followed by a digit)
+		if len(parts[1]) >= 2 && parts[1][0] == 'v' && parts[1][1] >= '0' && parts[1][1] <= '9' {
+			// resource.version or resource.version.group (group may contain dots)
+			requestedVersion = parts[1]
+			if len(parts) > 2 {
+				requestedGroup = strings.Join(parts[2:], ".")
+			}
+		} else {
+			// resource.group (group may contain dots)
+			requestedGroup = strings.Join(parts[1:], ".")
+		}
 	}
 
 	// Find the resource using discovery

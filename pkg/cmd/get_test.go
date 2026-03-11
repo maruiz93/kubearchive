@@ -823,8 +823,14 @@ func TestRun(t *testing.T) {
 
 				// Normalize dynamic timestamps in pagination commands for predictable testing
 				if strings.Contains(actualOutput, "--before") {
+					// Verify the --before timestamp is in UTC (ends with Z)
+					re := regexp.MustCompile(`--before (\S+)`)
+					matches := re.FindStringSubmatch(actualOutput)
+					if len(matches) == 2 {
+						assert.True(t, strings.HasSuffix(matches[1], "Z"),
+							"pagination --before timestamp should be in UTC (ending with Z), got: %s", matches[1])
+					}
 					// Replace dynamic timestamp with placeholder for comparison
-					re := regexp.MustCompile(`--before \S+`)
 					actualOutput = re.ReplaceAllString(actualOutput, "--before <timestamp-placeholder>")
 				}
 
