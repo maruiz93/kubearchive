@@ -79,6 +79,16 @@ func newMockDiscoveryClient() *MockDiscoveryClient {
 						Version:      "v1",
 					},
 				},
+				{
+					Name: "tekton.dev",
+					Versions: []metav1.GroupVersionForDiscovery{
+						{GroupVersion: "tekton.dev/v1", Version: "v1"},
+					},
+					PreferredVersion: metav1.GroupVersionForDiscovery{
+						GroupVersion: "tekton.dev/v1",
+						Version:      "v1",
+					},
+				},
 			},
 		},
 		serverResources: map[string]*metav1.APIResourceList{
@@ -145,6 +155,17 @@ func newMockDiscoveryClient() *MockDiscoveryClient {
 						SingularName: "job",
 						Namespaced:   true,
 						Kind:         "Job",
+					},
+				},
+			},
+			"tekton.dev/v1": {
+				GroupVersion: "tekton.dev/v1",
+				APIResources: []metav1.APIResource{
+					{
+						Name:         "pipelineruns",
+						SingularName: "pipelinerun",
+						Namespaced:   true,
+						Kind:         "PipelineRun",
 					},
 				},
 			},
@@ -670,16 +691,42 @@ func TestResolveResourceSpec(t *testing.T) {
 			expectedKind:     "Deployment",
 		},
 		{
+			name:             "dotted group - plural with group",
+			resourceSpec:     "pipelineruns.tekton.dev",
+			expectedResource: "pipelineruns",
+			expectedVersion:  "v1",
+			expectedGroup:    "tekton.dev",
+			expectedKind:     "PipelineRun",
+		},
+		{
+			name:             "dotted group - singular with group",
+			resourceSpec:     "pipelinerun.tekton.dev",
+			expectedResource: "pipelineruns",
+			expectedVersion:  "v1",
+			expectedGroup:    "tekton.dev",
+			expectedKind:     "PipelineRun",
+		},
+		{
+			name:             "dotted group - plural with version and group",
+			resourceSpec:     "pipelineruns.v1.tekton.dev",
+			expectedResource: "pipelineruns",
+			expectedVersion:  "v1",
+			expectedGroup:    "tekton.dev",
+			expectedKind:     "PipelineRun",
+		},
+		{
+			name:             "dotted group - singular with version and group",
+			resourceSpec:     "pipelinerun.v1.tekton.dev",
+			expectedResource: "pipelineruns",
+			expectedVersion:  "v1",
+			expectedGroup:    "tekton.dev",
+			expectedKind:     "PipelineRun",
+		},
+		{
 			name:          "empty resource",
 			resourceSpec:  "",
 			expectError:   true,
 			errorContains: "resource name cannot be empty",
-		},
-		{
-			name:          "too many parts",
-			resourceSpec:  "pods.v1.core.extra",
-			expectError:   true,
-			errorContains: "invalid resource specification format",
 		},
 		{
 			name:          "resource not found",
