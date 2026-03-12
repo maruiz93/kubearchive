@@ -35,6 +35,12 @@ type DBReader interface {
 	QueryResources(ctx context.Context, kind, apiVersion, namespace,
 		name, continueId, continueDate string, labelFilters *models.LabelFilters,
 		creationTimestampAfter, creationTimestampBefore *time.Time, limit int) ([]models.Resource, error)
+	// StreamResources iterates over matching resources row by row, calling fn for each.
+	// Unlike QueryResources, it does not load all rows into memory at once.
+	StreamResources(ctx context.Context, kind, apiVersion, namespace,
+		name, continueId, continueDate string, labelFilters *models.LabelFilters,
+		creationTimestampAfter, creationTimestampBefore *time.Time, limit int,
+		fn func(resource models.Resource) error) error
 	QueryResourceByUID(ctx context.Context, kind, apiVersion, namespace, uid string) (*models.Resource, error)
 	QueryLogURLByName(ctx context.Context, kind, apiVersion, namespace, name, containerName string) (*LogRecord, error)
 	QueryLogURLByUID(ctx context.Context, kind, apiVersion, namespace, uid, containerName string) (*LogRecord, error)
