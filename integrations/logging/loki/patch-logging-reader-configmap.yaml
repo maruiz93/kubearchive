@@ -15,6 +15,7 @@ data:
         params:
           query: ${QUERY}
           start: ${START}
+          end: ${END}
           limit: ${TAIL_LINES}
           direction: backward
         json-path: "$.data.result[*].values[*][1]"
@@ -26,6 +27,7 @@ data:
         params:
           query: ${QUERY}
           start: ${START}
+          end: ${END}
           limit: 300
           direction: forward
         json-path: "$.data.result[*].values[*][1]"
