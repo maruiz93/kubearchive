@@ -23,64 +23,14 @@
 
 set -euo pipefail
 
-BATCH_SIZE="${BATCH_SIZE:-100000}"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+BATCH_SIZE="${BATCH_SIZE:-10000}"
 SLEEP_INTERVAL="${SLEEP_INTERVAL:-0.1}"
 
 PGPASSWORD="${DATABASE_PASSWORD}"; export PGPASSWORD
 
 PSQL_OPTS="-h ${DATABASE_URL} -p ${DATABASE_PORT} -U ${DATABASE_USER} -d ${DATABASE_DB} -t -A"
-
-# ============================================================================
-# Step 1: Extract all unique label keys from existing resources
-# ============================================================================
-echo "Inserting label keys..."
-# shellcheck disable=SC2086
-psql ${PSQL_OPTS} -c "
-    INSERT INTO label_key (key)
-    SELECT DISTINCT key
-    FROM resource r,
-         LATERAL jsonb_object_keys(r.data -> 'metadata' -> 'labels') AS key
-    WHERE r.data->'metadata'->'labels' IS NOT NULL
-    ON CONFLICT (key) DO NOTHING;
-"
-echo "Label keys populated."
-
-# ============================================================================
-# Step 2: Extract all unique label values from existing resources
-# ============================================================================
-echo "Inserting label values..."
-# shellcheck disable=SC2086
-psql ${PSQL_OPTS} -c "
-    INSERT INTO label_value (value)
-    SELECT DISTINCT kv.value
-    FROM resource r,
-         LATERAL jsonb_each_text(r.data->'metadata'->'labels') AS kv(key, value)
-    WHERE r.data->'metadata'->'labels' IS NOT NULL
-    ON CONFLICT (value) DO NOTHING;
-"
-echo "Label values populated."
-
-# ============================================================================
-# Step 3: Create unique label pairs (key-value combinations)
-# ============================================================================
-echo "Inserting label key-value pairs..."
-# shellcheck disable=SC2086
-psql ${PSQL_OPTS} -c "
-    INSERT INTO label_key_value (key_id, value_id)
-    SELECT DISTINCT lk.id, lv.id
-    FROM resource r,
-         LATERAL jsonb_each_text(r.data->'metadata'->'labels') AS kv(key, value)
-             INNER JOIN label_key lk ON lk.key = kv.key
-             INNER JOIN label_value lv ON lv.value = kv.value
-    WHERE r.data->'metadata'->'labels' IS NOT NULL
-    ON CONFLICT (key_id, value_id) DO NOTHING;
-"
-echo "Label key-value pairs populated."
-
-# ============================================================================
-# Step 4: Populate resource_label in batches
-# ============================================================================
-echo "Populating resource_label table (batch size: ${BATCH_SIZE})..."
 
 # Get min and max resource IDs
 # shellcheck disable=SC2086
@@ -89,13 +39,30 @@ MIN_ID=$(psql ${PSQL_OPTS} -c "SELECT COALESCE(MIN(id), 0) FROM resource;")
 MAX_ID=$(psql ${PSQL_OPTS} -c "SELECT COALESCE(MAX(id), 0) FROM resource;")
 
 if [ "${MAX_ID}" -eq 0 ]; then
-    echo "No resources found, nothing to populate."
+    log "No resources found, nothing to populate."
     exit 0
 fi
 
-echo "Resource ID range: ${MIN_ID} to ${MAX_ID}"
+log "Resource ID range: ${MIN_ID} to ${MAX_ID}"
 
-total=0
+# ============================================================================
+# Single-pass batched population of all label tables.
+#
+# Each batch:
+#   1. Extracts label key-value pairs from resource JSONB into a temp table
+#   2. Inserts unique keys into label_key
+#   3. Inserts unique values into label_value
+#   4. Inserts unique key-value pairs into label_key_value
+#   5. Inserts resource-label associations into resource_label
+#
+# This avoids parsing the JSONB data multiple times per batch.
+# ============================================================================
+log "Populating label tables (batch size: ${BATCH_SIZE})..."
+
+total_keys=0
+total_values=0
+total_pairs=0
+total_links=0
 current="${MIN_ID}"
 
 while [ "${current}" -le "${MAX_ID}" ]; do
@@ -103,25 +70,67 @@ while [ "${current}" -le "${MAX_ID}" ]; do
 
     # shellcheck disable=SC2086
     RESULT=$(psql ${PSQL_OPTS} -c "
-        INSERT INTO resource_label (resource_id, label_id)
-        SELECT DISTINCT r.id, lp.id
-        FROM resource r
-        CROSS JOIN LATERAL jsonb_each_text(r.data->'metadata'->'labels') AS kv(key, value)
-            INNER JOIN label_key lk ON lk.key = kv.key
-            INNER JOIN label_value lv ON lv.value = kv.value
-            INNER JOIN label_key_value lp ON lp.key_id = lk.id AND lp.value_id = lv.id
+        BEGIN;
+
+        -- Extract JSONB labels once into a temp table
+        CREATE TEMP TABLE batch_labels ON COMMIT DROP AS
+        SELECT DISTINCT r.id AS resource_id, kv.key, kv.value
+        FROM resource r,
+             LATERAL jsonb_each_text(r.data->'metadata'->'labels') AS kv(key, value)
         WHERE r.data->'metadata'->'labels' IS NOT NULL
           AND r.id >= ${current}
-          AND r.id <= ${batch_end}
+          AND r.id <= ${batch_end};
+
+        -- Insert unique keys
+        INSERT INTO label_key (key)
+        SELECT DISTINCT key FROM batch_labels
+        ON CONFLICT (key) DO NOTHING;
+
+        -- Insert unique values
+        INSERT INTO label_value (value)
+        SELECT DISTINCT value FROM batch_labels
+        ON CONFLICT (value) DO NOTHING;
+
+        -- Insert unique key-value pairs
+        INSERT INTO label_key_value (key_id, value_id)
+        SELECT DISTINCT lk.id, lv.id
+        FROM batch_labels bl
+            INNER JOIN label_key lk ON lk.key = bl.key
+            INNER JOIN label_value lv ON lv.value = bl.value
+        ON CONFLICT (key_id, value_id) DO NOTHING;
+
+        -- Insert resource-label associations
+        INSERT INTO resource_label (resource_id, label_id)
+        SELECT DISTINCT bl.resource_id, lkv.id
+        FROM batch_labels bl
+            INNER JOIN label_key lk ON lk.key = bl.key
+            INNER JOIN label_value lv ON lv.value = bl.value
+            INNER JOIN label_key_value lkv ON lkv.key_id = lk.id AND lkv.value_id = lv.id
         ON CONFLICT (resource_id, label_id) DO NOTHING;
+
+        COMMIT;
     ")
 
-    count=$(echo "${RESULT}" | sed 's/INSERT 0 //')
-    total=$((total + count))
-    echo "Batch ${current}-${batch_end}: inserted ${count} rows (total: ${total})"
+    # Parse INSERT counts: label_key, label_value, label_key_value, resource_label
+    INSERTS=$(echo "${RESULT}" | grep '^INSERT' | sed 's/INSERT 0 //')
+    keys=$(echo "${INSERTS}" | sed -n '1p')
+    values=$(echo "${INSERTS}" | sed -n '2p')
+    pairs=$(echo "${INSERTS}" | sed -n '3p')
+    links=$(echo "${INSERTS}" | sed -n '4p')
+
+    total_keys=$((total_keys + keys))
+    total_values=$((total_values + values))
+    total_pairs=$((total_pairs + pairs))
+    total_links=$((total_links + links))
+
+    log "Batch ${current}-${batch_end}: keys=${keys} values=${values} pairs=${pairs} resource_labels=${links}"
 
     current=$((batch_end + 1))
     sleep "${SLEEP_INTERVAL}"
 done
 
-echo "Resource label population complete. Total rows inserted: ${total}"
+log "Label tables population complete."
+log "  label_key:       ${total_keys} rows inserted"
+log "  label_value:     ${total_values} rows inserted"
+log "  label_key_value: ${total_pairs} rows inserted"
+log "  resource_label:  ${total_links} rows inserted"

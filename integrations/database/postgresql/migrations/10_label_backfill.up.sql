@@ -13,7 +13,7 @@ SELECT DISTINCT key
 FROM resource r,
      LATERAL jsonb_object_keys(r.data -> 'metadata' -> 'labels') AS key
 WHERE r.data->'metadata'->'labels' IS NOT NULL
-  AND r.updated_at >= now() - INTERVAL '7 days'
+  AND r.updated_at >= now() - INTERVAL '1 days'
 ON CONFLICT (key) DO NOTHING;
 
 -- Backfill label values
@@ -22,7 +22,7 @@ SELECT DISTINCT kv.value
 FROM resource r,
      LATERAL jsonb_each_text(r.data->'metadata'->'labels') AS kv(key, value)
 WHERE r.data->'metadata'->'labels' IS NOT NULL
-  AND r.updated_at >= now() - INTERVAL '7 days'
+  AND r.updated_at >= now() - INTERVAL '1 days'
 ON CONFLICT (value) DO NOTHING;
 
 -- Backfill label key-value pairs
@@ -33,7 +33,7 @@ FROM resource r,
          INNER JOIN label_key lk ON lk.key = kv.key
          INNER JOIN label_value lv ON lv.value = kv.value
 WHERE r.data->'metadata'->'labels' IS NOT NULL
-  AND r.updated_at >= now() - INTERVAL '7 days'
+  AND r.updated_at >= now() - INTERVAL '1 days'
 ON CONFLICT (key_id, value_id) DO NOTHING;
 
 -- Backfill resource-label associations
@@ -45,5 +45,5 @@ FROM resource r,
          INNER JOIN label_value lv ON lv.value = kv.value
          INNER JOIN label_key_value lp ON lp.key_id = lk.id AND lp.value_id = lv.id
 WHERE r.data->'metadata'->'labels' IS NOT NULL
-  AND r.updated_at >= now() - INTERVAL '7 days'
+  AND r.updated_at >= now() - INTERVAL '1 days'
 ON CONFLICT (resource_id, label_id) DO NOTHING;
